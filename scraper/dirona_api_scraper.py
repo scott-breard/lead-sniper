@@ -16,8 +16,8 @@ from datetime import datetime
 # CONFIGURATION
 # ============================================================
 
-# **PASTE YOUR GOOGLE PLACES API KEY HERE**
-GOOGLE_API_KEY = "YOUR_API_KEY_HERE"  # Replace with your actual API key
+# **GOOGLE PLACES API KEY**
+GOOGLE_API_KEY = "AIzaSyBBpTCIYUKGxs8oWwe5YtFpeU9RJ8jkK7s"
 
 # Search settings
 SEARCH_QUERY = "fine dining restaurant"
