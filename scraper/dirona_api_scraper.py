@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-DiRoNA Lead Scraper v3.2 - Google Places API Edition with State-Named CSVs
+DiRoNA Lead Scraper v4.0 - Text Search + Place Details (Full Info)
 Searches all 42,000 US ZIP codes for fine dining restaurants.
-Creates separate CSV files per state for easy organization.
+Makes Place Details calls for complete data including hours and photos.
+Cost: ~$1,314 total ($1,114 after $200 free credit)
 """
 
 import csv
@@ -40,12 +41,18 @@ MAX_RESULTS_PER_ZIP = 20  # Google returns max 20 results per search
 OUTPUT_DIR = "output"
 PROGRESS_FILE = "scraper/api_progress.json"
 
-# CSV columns
+# CSV columns (expanded for Place Details)
 CSV_COLUMNS = [
     "Restaurant Name", "Street Address", "City", "State", "ZIP",
     "Country", "Rating", "Review Count", "Price Level",
     "Cuisine Type", "Phone", "Website", "Google Maps URL",
-    "Place ID", "Latitude", "Longitude", "ZIP Searched", "Date Scraped"
+    "Place ID", "Latitude", "Longitude",
+    "Hours Monday", "Hours Tuesday", "Hours Wednesday", "Hours Thursday",
+    "Hours Friday", "Hours Saturday", "Hours Sunday",
+    "Business Status", "Serves Dinner", "Serves Wine", "Serves Beer",
+    "Reservable", "Dine In", "Takeout", "Delivery",
+    "Photo URL 1", "Photo URL 2", "Photo URL 3",
+    "ZIP Searched", "Date Scraped"
 ]
 
 # All US states with ZIP ranges and abbreviations
@@ -148,7 +155,13 @@ def load_progress():
     if os.path.exists(PROGRESS_FILE):
         with open(PROGRESS_FILE, "r") as f:
             return json.load(f)
-    return {"completed_zips": [], "total_found": 0, "total_qualified": 0, "api_calls": 0}
+    return {
+        "completed_zips": [],
+        "total_found": 0,
+        "total_qualified": 0,
+        "search_api_calls": 0,
+        "details_api_calls": 0
+    }
 
 def save_progress(progress):
     """Save scraping progress to file."""
@@ -177,12 +190,11 @@ def write_csv(filepath, rows):
 def search_places_api(zip_code, state_name):
     """
     Search Google Places API for fine dining restaurants in a ZIP code.
-    Includes state name in query for better location accuracy.
     Returns list of places with basic info.
+    Cost: $0.032 per search
     """
     url = "https://places.googleapis.com/v1/places:searchText"
     
-    # Add state to search query for better location targeting
     state_abbrev = STATE_ABBREV.get(state_name, "")
     query = f"{SEARCH_QUERY} {zip_code} {state_abbrev}"
     
@@ -192,8 +204,7 @@ def search_places_api(zip_code, state_name):
         "X-Goog-FieldMask": (
             "places.id,places.displayName,places.formattedAddress,"
             "places.rating,places.userRatingCount,places.priceLevel,"
-            "places.types,places.nationalPhoneNumber,places.websiteUri,"
-            "places.googleMapsUri,places.location"
+            "places.types,places.location"
         )
     }
     
@@ -202,64 +213,125 @@ def search_places_api(zip_code, state_name):
         "maxResultCount": MAX_RESULTS_PER_ZIP,
         "locationBias": {
             "circle": {
-                "center": {"latitude": 39.8283, "longitude": -98.5795},  # Center of US
-                "radius": 50000.0  # 50km radius
+                "center": {"latitude": 39.8283, "longitude": -98.5795},
+                "radius": 50000.0
             }
         }
     }
     
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=30)
-        
         if response.status_code == 200:
-            data = response.json()
-            return data.get("places", [])
+            return response.json().get("places", [])
         else:
             print(f"    API Error {response.status_code}: {response.text[:200]}")
             return []
-            
     except Exception as e:
         print(f"    Request failed: {e}")
         return []
 
-def parse_place(place, zip_searched, target_state):
+def get_place_details(place_id):
     """
-    Parse a place from API response into our CSV format.
+    Get full place details including hours, photos, and amenities.
+    Cost: $0.017 per details call
+    """
+    url = f"https://places.googleapis.com/v1/places/{place_id}"
+    
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": GOOGLE_API_KEY,
+        "X-Goog-FieldMask": (
+            "id,displayName,formattedAddress,internationalPhoneNumber,"
+            "nationalPhoneNumber,websiteUri,googleMapsUri,location,"
+            "rating,userRatingCount,priceLevel,types,"
+            "regularOpeningHours,businessStatus,"
+            "servesDinner,servesWine,servesWine,servesBeer,"
+            "reservable,dineIn,takeout,delivery,"
+            "photos.name"
+        )
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"      Details API Error {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"      Details request failed: {e}")
+        return None
+
+def parse_hours(opening_hours):
+    """Parse opening hours into individual day columns."""
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    hours_dict = {f"Hours {day}": "" for day in days}
+    
+    if not opening_hours or "weekdayDescriptions" not in opening_hours:
+        return hours_dict
+    
+    for desc in opening_hours.get("weekdayDescriptions", []):
+        # Format: "Monday: 5:00 PM – 10:00 PM"
+        if ": " in desc:
+            day, hours = desc.split(": ", 1)
+            hours_dict[f"Hours {day}"] = hours
+    
+    return hours_dict
+
+def get_photo_urls(photos):
+    """Extract up to 3 photo URLs from photos array."""
+    photo_urls = {"Photo URL 1": "", "Photo URL 2": "", "Photo URL 3": ""}
+    
+    if not photos:
+        return photo_urls
+    
+    for i, photo in enumerate(photos[:3], 1):
+        photo_name = photo.get("name", "")
+        if photo_name:
+            # Construct photo URL
+            photo_url = f"https://places.googleapis.com/v1/{photo_name}/media?key={GOOGLE_API_KEY}&maxHeightPx=1600&maxWidthPx=1600"
+            photo_urls[f"Photo URL {i}"] = photo_url
+    
+    return photo_urls
+
+def parse_place_with_details(place, details, zip_searched, target_state):
+    """
+    Parse place with full details into CSV format.
     Returns dict or None if doesn't meet criteria or wrong state.
     """
-    # Extract basic fields
-    name = place.get("displayName", {}).get("text", "")
+    # Use details if available, fallback to search result
+    data = details if details else place
+    
+    name = data.get("displayName", {}).get("text", "")
     if not name:
         return None
     
-    # Parse address FIRST to check state
-    address = place.get("formattedAddress", "")
+    # Parse address and check state
+    address = data.get("formattedAddress", "")
     address_parts = address.split(", ") if address else []
     
     street = address_parts[0] if len(address_parts) > 0 else ""
     city = address_parts[1] if len(address_parts) > 1 else ""
     state_zip = address_parts[2] if len(address_parts) > 2 else ""
-    
-    # Extract state abbreviation
     state = state_zip.split()[0] if state_zip else ""
     
-    # CRITICAL: Filter out results not in target state
+    # State filter
     target_abbrev = STATE_ABBREV.get(target_state, "")
     if state != target_abbrev:
         return None
     
     # Rating check
-    rating = place.get("rating", 0)
+    rating = data.get("rating", 0)
     if rating < MIN_RATING:
         return None
     
     # Review count check
-    review_count = place.get("userRatingCount", 0)
+    review_count = data.get("userRatingCount", 0)
     if review_count < MIN_REVIEWS:
         return None
     
     # Price level check
-    price_level = place.get("priceLevel", "")
+    price_level = data.get("priceLevel", "")
     price_map = {
         "PRICE_LEVEL_FREE": 0,
         "PRICE_LEVEL_INEXPENSIVE": 1,
@@ -272,23 +344,33 @@ def parse_place(place, zip_searched, target_state):
     if price_num < MIN_PRICE_LEVEL:
         return None
     
-    # Convert to $ symbols
     price_display = "$" * price_num if price_num > 0 else ""
     
-    # Get cuisine type from types array
-    types = place.get("types", [])
+    # Cuisine type
+    types = data.get("types", [])
     cuisine_type = ", ".join([t.replace("_", " ").title() for t in types if "restaurant" in t.lower()][:3])
     
     # Exclusion check
     if is_excluded(name, cuisine_type):
         return None
     
-    # Get coordinates
-    location = place.get("location", {})
+    # Coordinates
+    location = data.get("location", {})
     lat = location.get("latitude", "")
     lng = location.get("longitude", "")
     
-    return {
+    # Parse hours from details
+    hours = parse_hours(data.get("regularOpeningHours")) if details else {
+        f"Hours {day}": "" for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    }
+    
+    # Parse photos from details
+    photos = get_photo_urls(data.get("photos", [])) if details else {
+        "Photo URL 1": "", "Photo URL 2": "", "Photo URL 3": ""
+    }
+    
+    # Build result
+    result = {
         "Restaurant Name": name,
         "Street Address": street,
         "City": city,
@@ -299,15 +381,29 @@ def parse_place(place, zip_searched, target_state):
         "Review Count": review_count,
         "Price Level": price_display,
         "Cuisine Type": cuisine_type,
-        "Phone": place.get("nationalPhoneNumber", ""),
-        "Website": place.get("websiteUri", ""),
-        "Google Maps URL": place.get("googleMapsUri", ""),
-        "Place ID": place.get("id", ""),
+        "Phone": data.get("nationalPhoneNumber", data.get("internationalPhoneNumber", "")),
+        "Website": data.get("websiteUri", ""),
+        "Google Maps URL": data.get("googleMapsUri", ""),
+        "Place ID": data.get("id", ""),
         "Latitude": lat,
         "Longitude": lng,
+        "Business Status": data.get("businessStatus", ""),
+        "Serves Dinner": data.get("servesDinner", ""),
+        "Serves Wine": data.get("servesWine", ""),
+        "Serves Beer": data.get("servesBeer", ""),
+        "Reservable": data.get("reservable", ""),
+        "Dine In": data.get("dineIn", ""),
+        "Takeout": data.get("takeout", ""),
+        "Delivery": data.get("delivery", ""),
         "ZIP Searched": zip_searched,
         "Date Scraped": datetime.now().strftime("%Y-%m-%d")
     }
+    
+    # Add hours and photos
+    result.update(hours)
+    result.update(photos)
+    
+    return result
 
 # ============================================================
 # MAIN SCRAPER
@@ -315,19 +411,18 @@ def parse_place(place, zip_searched, target_state):
 
 def run_api_scraper(state="ALL"):
     """
-    Run the API scraper for specified state(s).
+    Run the API scraper with Place Details calls.
     """
     if GOOGLE_API_KEY == "YOUR_API_KEY_HERE":
-        print("\n❌ ERROR: Please add your Google Places API key to the script!")
-        print("   Edit line 16: GOOGLE_API_KEY = \"YOUR_ACTUAL_KEY_HERE\"\n")
+        print("\n❌ ERROR: Please add your Google Places API key!")
         return
     
-    # Determine states to process
+    # Determine states
     if state == "ALL":
         states_to_run = STATES_ALPHABETICAL
     else:
         if state not in STATE_ZIPS:
-            print(f"ERROR: '{state}' not found in state list.")
+            print(f"ERROR: '{state}' not found.")
             return
         states_to_run = [state]
     
@@ -339,31 +434,27 @@ def run_api_scraper(state="ALL"):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     print(f"\n{'='*70}")
-    print(f"  DiRoNA Lead Scraper v3.2 - State-Named CSV Files")
+    print(f"  DiRoNA Lead Scraper v4.0 - WITH PLACE DETAILS")
     print(f"{'='*70}")
-    print(f"  Target States : {len(states_to_run)} ({states_to_run[0]} → {states_to_run[-1]})")
+    print(f"  Target States : {len(states_to_run)}")
     print(f"  Search Query  : {SEARCH_QUERY}")
     print(f"  Filters       : Rating ≥{MIN_RATING} | Price ≥{'$'*MIN_PRICE_LEVEL} | Reviews ≥{MIN_REVIEWS}")
-    print(f"  Location      : Results filtered to target state only")
-    print(f"  Output        : Separate CSV per state in {OUTPUT_DIR}/")
-    print(f"  Progress      : {len(completed_zips):,} ZIPs complete | {progress.get('total_qualified', 0):,} qualified")
-    print(f"  API Calls     : {progress.get('api_calls', 0):,} made")
+    print(f"  Details       : Hours, Photos, Amenities included")
+    print(f"  Costs         : Search $0.032 + Details $0.017 = $0.049/restaurant")
+    print(f"  Progress      : {len(completed_zips):,} ZIPs | {progress.get('total_qualified', 0):,} qualified")
+    print(f"  API Calls     : {progress.get('search_api_calls', 0):,} search | {progress.get('details_api_calls', 0):,} details")
     print(f"{'='*70}\n")
-    
-    total_states = len(states_to_run)
     
     for state_idx, current_state in enumerate(states_to_run, 1):
         print(f"\n{'='*70}")
-        print(f"  STATE {state_idx}/{total_states}: {current_state.upper()} ({STATE_ABBREV[current_state]})")
+        print(f"  STATE {state_idx}/{len(states_to_run)}: {current_state.upper()} ({STATE_ABBREV[current_state]})")
         print(f"{'='*70}")
         
-        # Get CSV filename for this state
         state_csv = get_state_csv_filename(current_state)
-        print(f"  Output File: {state_csv}\n")
+        print(f"  Output: {state_csv}\n")
         
         zips = STATE_ZIPS[current_state]
         state_qualified = 0
-        state_filtered = 0
         
         for zip_idx, zip_code in enumerate(zips, 1):
             zip_str = str(zip_code).zfill(5)
@@ -373,9 +464,9 @@ def run_api_scraper(state="ALL"):
             
             print(f"\n  ZIP {zip_str} ({zip_idx}/{len(zips)})")
             
-            # Search API
+            # Search
             places = search_places_api(zip_str, current_state)
-            progress["api_calls"] = progress.get("api_calls", 0) + 1
+            progress["search_api_calls"] = progress.get("search_api_calls", 0) + 1
             
             if not places:
                 print(f"    No results")
@@ -385,31 +476,38 @@ def run_api_scraper(state="ALL"):
                 time.sleep(API_DELAY)
                 continue
             
-            print(f"    Found {len(places)} results, filtering...")
+            print(f"    Found {len(places)} results, fetching details...")
             
-            # Parse and filter
+            # Process each place
             qualified = []
             for place in places:
                 place_id = place.get("id", "")
                 if place_id in seen_place_ids:
                     continue
                 
-                parsed = parse_place(place, zip_str, current_state)
+                # Quick check before details call
+                quick_check = parse_place_with_details(place, None, zip_str, current_state)
+                if not quick_check:
+                    continue
+                
+                # Get full details
+                details = get_place_details(place_id)
+                progress["details_api_calls"] = progress.get("details_api_calls", 0) + 1
+                time.sleep(API_DELAY)
+                
+                # Parse with details
+                parsed = parse_place_with_details(place, details, zip_str, current_state)
                 if parsed:
                     seen_place_ids.add(place_id)
                     qualified.append(parsed)
-                    print(f"      ✅ {parsed['Restaurant Name']} | {parsed['City']}, {parsed['State']} | {parsed['Rating']}⭐ | {parsed['Price Level']}")
-                else:
-                    state_filtered += 1
+                    print(f"      ✅ {parsed['Restaurant Name']} | {parsed['City']}, {parsed['State']} | {parsed['Rating']}⭐")
             
-            # Save results to state-specific CSV
+            # Save
             if qualified:
                 write_csv(state_csv, qualified)
                 state_qualified += len(qualified)
                 progress["total_qualified"] = progress.get("total_qualified", 0) + len(qualified)
-                print(f"    💾 Saved {len(qualified)} restaurants (state total: {state_qualified})")
-            elif state_filtered > 0:
-                print(f"    🔍 Filtered out {state_filtered} wrong-state results")
+                print(f"    💾 Saved {len(qualified)} restaurants (state: {state_qualified})")
             
             # Update progress
             completed_zips.add(zip_str)
@@ -419,24 +517,23 @@ def run_api_scraper(state="ALL"):
             
             time.sleep(API_DELAY)
         
+        search_cost = progress.get('search_api_calls', 0) * 0.032
+        details_cost = progress.get('details_api_calls', 0) * 0.017
+        total_cost = search_cost + details_cost
+        
         print(f"\n  ✅ {current_state} COMPLETE: {state_qualified} restaurants")
-        print(f"     CSV File: {state_csv}")
-        print(f"     Progress: {len(completed_zips):,}/42,000 ZIPs | {progress['total_qualified']:,} qualified total")
+        print(f"     Progress: {len(completed_zips):,}/42,000 ZIPs | {progress['total_qualified']:,} total")
+        print(f"     Cost: ${total_cost:.2f} (${search_cost:.2f} search + ${details_cost:.2f} details)")
     
     print(f"\n{'='*70}")
-    print(f"  🎉 SCRAPING COMPLETE!")
+    print(f"  🎉 COMPLETE!")
     print(f"{'='*70}")
-    print(f"  Total ZIPs Searched    : {len(completed_zips):,}")
-    print(f"  Total API Calls        : {progress['api_calls']:,}")
-    print(f"  Total Results Found    : {progress['total_found']:,}")
-    print(f"  Qualified Restaurants  : {progress['total_qualified']:,}")
-    print(f"  Output Directory       : {OUTPUT_DIR}/")
-    print(f"  Estimated API Cost     : ${(progress['api_calls'] * 0.032):.2f}")
+    print(f"  ZIPs Searched         : {len(completed_zips):,}")
+    print(f"  Search API Calls      : {progress['search_api_calls']:,} (${progress['search_api_calls'] * 0.032:.2f})")
+    print(f"  Details API Calls     : {progress['details_api_calls']:,} (${progress['details_api_calls'] * 0.017:.2f})")
+    print(f"  Qualified Restaurants : {progress['total_qualified']:,}")
+    print(f"  Total Cost            : ${(progress['search_api_calls'] * 0.032 + progress['details_api_calls'] * 0.017):.2f}")
     print(f"{'='*70}\n")
-
-# ============================================================
-# ENTRY POINT
-# ============================================================
 
 if __name__ == "__main__":
     import sys
