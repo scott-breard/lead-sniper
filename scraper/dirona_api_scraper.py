@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-DiRoNA Lead Scraper v3.1 - Google Places API Edition with Location Filtering
+DiRoNA Lead Scraper v3.2 - Google Places API Edition with State-Named CSVs
 Searches all 42,000 US ZIP codes for fine dining restaurants.
-Now filters to only include results from the target state.
+Creates separate CSV files per state for easy organization.
 """
 
 import csv
@@ -39,7 +39,6 @@ MAX_RESULTS_PER_ZIP = 20  # Google returns max 20 results per search
 # File paths
 OUTPUT_DIR = "output"
 PROGRESS_FILE = "scraper/api_progress.json"
-MASTER_CSV = os.path.join(OUTPUT_DIR, "dirona_leads_nationwide_api.csv")
 
 # CSV columns
 CSV_COLUMNS = [
@@ -135,6 +134,14 @@ STATE_ZIPS = {
 # ============================================================
 # HELPERS
 # ============================================================
+
+def get_state_csv_filename(state_name):
+    """Generate CSV filename for a specific state."""
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    date_str = datetime.now().strftime("%Y%m%d")
+    state_abbrev = STATE_ABBREV.get(state_name, "")
+    safe_name = state_name.replace(" ", "_")
+    return os.path.join(OUTPUT_DIR, f"dirona_leads_{safe_name}_{state_abbrev}_{date_str}.csv")
 
 def load_progress():
     """Load scraping progress from file."""
@@ -332,13 +339,13 @@ def run_api_scraper(state="ALL"):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     print(f"\n{'='*70}")
-    print(f"  DiRoNA Lead Scraper v3.1 - With State Filtering")
+    print(f"  DiRoNA Lead Scraper v3.2 - State-Named CSV Files")
     print(f"{'='*70}")
     print(f"  Target States : {len(states_to_run)} ({states_to_run[0]} → {states_to_run[-1]})")
     print(f"  Search Query  : {SEARCH_QUERY}")
     print(f"  Filters       : Rating ≥{MIN_RATING} | Price ≥{'$'*MIN_PRICE_LEVEL} | Reviews ≥{MIN_REVIEWS}")
     print(f"  Location      : Results filtered to target state only")
-    print(f"  Output File   : {MASTER_CSV}")
+    print(f"  Output        : Separate CSV per state in {OUTPUT_DIR}/")
     print(f"  Progress      : {len(completed_zips):,} ZIPs complete | {progress.get('total_qualified', 0):,} qualified")
     print(f"  API Calls     : {progress.get('api_calls', 0):,} made")
     print(f"{'='*70}\n")
@@ -349,6 +356,10 @@ def run_api_scraper(state="ALL"):
         print(f"\n{'='*70}")
         print(f"  STATE {state_idx}/{total_states}: {current_state.upper()} ({STATE_ABBREV[current_state]})")
         print(f"{'='*70}")
+        
+        # Get CSV filename for this state
+        state_csv = get_state_csv_filename(current_state)
+        print(f"  Output File: {state_csv}\n")
         
         zips = STATE_ZIPS[current_state]
         state_qualified = 0
@@ -391,9 +402,9 @@ def run_api_scraper(state="ALL"):
                 else:
                     state_filtered += 1
             
-            # Save results
+            # Save results to state-specific CSV
             if qualified:
-                write_csv(MASTER_CSV, qualified)
+                write_csv(state_csv, qualified)
                 state_qualified += len(qualified)
                 progress["total_qualified"] = progress.get("total_qualified", 0) + len(qualified)
                 print(f"    💾 Saved {len(qualified)} restaurants (state total: {state_qualified})")
@@ -409,6 +420,7 @@ def run_api_scraper(state="ALL"):
             time.sleep(API_DELAY)
         
         print(f"\n  ✅ {current_state} COMPLETE: {state_qualified} restaurants")
+        print(f"     CSV File: {state_csv}")
         print(f"     Progress: {len(completed_zips):,}/42,000 ZIPs | {progress['total_qualified']:,} qualified total")
     
     print(f"\n{'='*70}")
@@ -418,7 +430,7 @@ def run_api_scraper(state="ALL"):
     print(f"  Total API Calls        : {progress['api_calls']:,}")
     print(f"  Total Results Found    : {progress['total_found']:,}")
     print(f"  Qualified Restaurants  : {progress['total_qualified']:,}")
-    print(f"  Output File            : {MASTER_CSV}")
+    print(f"  Output Directory       : {OUTPUT_DIR}/")
     print(f"  Estimated API Cost     : ${(progress['api_calls'] * 0.032):.2f}")
     print(f"{'='*70}\n")
 
