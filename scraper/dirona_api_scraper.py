@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-DiRoNA Lead Scraper v3 - Google Places API Edition
+DiRoNA Lead Scraper v3.1 - Google Places API Edition with Location Filtering
 Searches all 42,000 US ZIP codes for fine dining restaurants.
-Fast, reliable, and cost-effective ($1,144 total or $744 over 3 months).
+Now filters to only include results from the target state.
 """
 
 import csv
@@ -49,7 +49,7 @@ CSV_COLUMNS = [
     "Place ID", "Latitude", "Longitude", "ZIP Searched", "Date Scraped"
 ]
 
-# All US states with ZIP ranges
+# All US states with ZIP ranges and abbreviations
 STATES_ALPHABETICAL = [
     "Alabama", "Alaska", "Arizona", "Arkansas", "California",
     "Colorado", "Connecticut", "Delaware", "Florida", "Georgia",
@@ -62,6 +62,22 @@ STATES_ALPHABETICAL = [
     "South Dakota", "Tennessee", "Texas", "Utah", "Vermont",
     "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming",
 ]
+
+STATE_ABBREV = {
+    "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
+    "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
+    "Florida": "FL", "Georgia": "GA", "Hawaii": "HI", "Idaho": "ID",
+    "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS",
+    "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
+    "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS",
+    "Missouri": "MO", "Montana": "MT", "Nebraska": "NE", "Nevada": "NV",
+    "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY",
+    "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK",
+    "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI", "South Carolina": "SC",
+    "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX", "Utah": "UT",
+    "Vermont": "VT", "Virginia": "VA", "Washington": "WA", "West Virginia": "WV",
+    "Wisconsin": "WI", "Wyoming": "WY"
+}
 
 STATE_ZIPS = {
     "Alabama":        list(range(35004, 36926)),
@@ -151,12 +167,17 @@ def write_csv(filepath, rows):
 # GOOGLE PLACES API FUNCTIONS
 # ============================================================
 
-def search_places_api(zip_code):
+def search_places_api(zip_code, state_name):
     """
     Search Google Places API for fine dining restaurants in a ZIP code.
+    Includes state name in query for better location accuracy.
     Returns list of places with basic info.
     """
     url = "https://places.googleapis.com/v1/places:searchText"
+    
+    # Add state to search query for better location targeting
+    state_abbrev = STATE_ABBREV.get(state_name, "")
+    query = f"{SEARCH_QUERY} {zip_code} {state_abbrev}"
     
     headers = {
         "Content-Type": "application/json",
@@ -170,12 +191,12 @@ def search_places_api(zip_code):
     }
     
     payload = {
-        "textQuery": f"{SEARCH_QUERY} {zip_code}",
+        "textQuery": query,
         "maxResultCount": MAX_RESULTS_PER_ZIP,
         "locationBias": {
             "circle": {
-                "center": {"latitude": 0, "longitude": 0},  # Will be overridden by query
-                "radius": 25000.0  # 25km radius
+                "center": {"latitude": 39.8283, "longitude": -98.5795},  # Center of US
+                "radius": 50000.0  # 50km radius
             }
         }
     }
@@ -194,14 +215,30 @@ def search_places_api(zip_code):
         print(f"    Request failed: {e}")
         return []
 
-def parse_place(place, zip_searched):
+def parse_place(place, zip_searched, target_state):
     """
     Parse a place from API response into our CSV format.
-    Returns dict or None if doesn't meet criteria.
+    Returns dict or None if doesn't meet criteria or wrong state.
     """
     # Extract basic fields
     name = place.get("displayName", {}).get("text", "")
     if not name:
+        return None
+    
+    # Parse address FIRST to check state
+    address = place.get("formattedAddress", "")
+    address_parts = address.split(", ") if address else []
+    
+    street = address_parts[0] if len(address_parts) > 0 else ""
+    city = address_parts[1] if len(address_parts) > 1 else ""
+    state_zip = address_parts[2] if len(address_parts) > 2 else ""
+    
+    # Extract state abbreviation
+    state = state_zip.split()[0] if state_zip else ""
+    
+    # CRITICAL: Filter out results not in target state
+    target_abbrev = STATE_ABBREV.get(target_state, "")
+    if state != target_abbrev:
         return None
     
     # Rating check
@@ -214,7 +251,7 @@ def parse_place(place, zip_searched):
     if review_count < MIN_REVIEWS:
         return None
     
-    # Price level check (PRICE_LEVEL_FREE=0, INEXPENSIVE=1, MODERATE=2, EXPENSIVE=3, VERY_EXPENSIVE=4)
+    # Price level check
     price_level = place.get("priceLevel", "")
     price_map = {
         "PRICE_LEVEL_FREE": 0,
@@ -238,14 +275,6 @@ def parse_place(place, zip_searched):
     # Exclusion check
     if is_excluded(name, cuisine_type):
         return None
-    
-    # Parse address
-    address = place.get("formattedAddress", "")
-    address_parts = address.split(", ") if address else []
-    
-    street = address_parts[0] if len(address_parts) > 0 else ""
-    city = address_parts[1] if len(address_parts) > 1 else ""
-    state = address_parts[2].split()[0] if len(address_parts) > 2 else ""
     
     # Get coordinates
     location = place.get("location", {})
@@ -303,11 +332,12 @@ def run_api_scraper(state="ALL"):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     print(f"\n{'='*70}")
-    print(f"  DiRoNA Lead Scraper v3 - Google Places API Edition")
+    print(f"  DiRoNA Lead Scraper v3.1 - With State Filtering")
     print(f"{'='*70}")
     print(f"  Target States : {len(states_to_run)} ({states_to_run[0]} → {states_to_run[-1]})")
     print(f"  Search Query  : {SEARCH_QUERY}")
     print(f"  Filters       : Rating ≥{MIN_RATING} | Price ≥{'$'*MIN_PRICE_LEVEL} | Reviews ≥{MIN_REVIEWS}")
+    print(f"  Location      : Results filtered to target state only")
     print(f"  Output File   : {MASTER_CSV}")
     print(f"  Progress      : {len(completed_zips):,} ZIPs complete | {progress.get('total_qualified', 0):,} qualified")
     print(f"  API Calls     : {progress.get('api_calls', 0):,} made")
@@ -317,11 +347,12 @@ def run_api_scraper(state="ALL"):
     
     for state_idx, current_state in enumerate(states_to_run, 1):
         print(f"\n{'='*70}")
-        print(f"  STATE {state_idx}/{total_states}: {current_state.upper()}")
+        print(f"  STATE {state_idx}/{total_states}: {current_state.upper()} ({STATE_ABBREV[current_state]})")
         print(f"{'='*70}")
         
         zips = STATE_ZIPS[current_state]
         state_qualified = 0
+        state_filtered = 0
         
         for zip_idx, zip_code in enumerate(zips, 1):
             zip_str = str(zip_code).zfill(5)
@@ -332,7 +363,7 @@ def run_api_scraper(state="ALL"):
             print(f"\n  ZIP {zip_str} ({zip_idx}/{len(zips)})")
             
             # Search API
-            places = search_places_api(zip_str)
+            places = search_places_api(zip_str, current_state)
             progress["api_calls"] = progress.get("api_calls", 0) + 1
             
             if not places:
@@ -352,11 +383,13 @@ def run_api_scraper(state="ALL"):
                 if place_id in seen_place_ids:
                     continue
                 
-                parsed = parse_place(place, zip_str)
+                parsed = parse_place(place, zip_str, current_state)
                 if parsed:
                     seen_place_ids.add(place_id)
                     qualified.append(parsed)
-                    print(f"      ✅ {parsed['Restaurant Name']} | {parsed['Rating']}⭐ | {parsed['Price Level']}")
+                    print(f"      ✅ {parsed['Restaurant Name']} | {parsed['City']}, {parsed['State']} | {parsed['Rating']}⭐ | {parsed['Price Level']}")
+                else:
+                    state_filtered += 1
             
             # Save results
             if qualified:
@@ -364,6 +397,8 @@ def run_api_scraper(state="ALL"):
                 state_qualified += len(qualified)
                 progress["total_qualified"] = progress.get("total_qualified", 0) + len(qualified)
                 print(f"    💾 Saved {len(qualified)} restaurants (state total: {state_qualified})")
+            elif state_filtered > 0:
+                print(f"    🔍 Filtered out {state_filtered} wrong-state results")
             
             # Update progress
             completed_zips.add(zip_str)
@@ -374,7 +409,7 @@ def run_api_scraper(state="ALL"):
             time.sleep(API_DELAY)
         
         print(f"\n  ✅ {current_state} COMPLETE: {state_qualified} restaurants")
-        print(f"     Progress: {len(completed_zips):,}/{42000} ZIPs | {progress['total_qualified']:,} qualified total")
+        print(f"     Progress: {len(completed_zips):,}/42,000 ZIPs | {progress['total_qualified']:,} qualified total")
     
     print(f"\n{'='*70}")
     print(f"  🎉 SCRAPING COMPLETE!")
