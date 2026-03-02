@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-DiRoNA Lead Scraper v4.0 - Text Search + Place Details (Full Info)
+DiRoNA Lead Scraper v4.1 - Text Search + Place Details (Full Info)
 Searches all 42,000 US ZIP codes for fine dining restaurants.
 Makes Place Details calls for complete data including hours and photos.
 Cost: ~$1,314 total ($1,114 after $200 free credit)
+
+SECURITY: API key is loaded from environment variable GOOGLE_PLACES_API_KEY
 """
 
 import csv
@@ -17,8 +19,16 @@ from datetime import datetime
 # CONFIGURATION
 # ============================================================
 
-# **GOOGLE PLACES API KEY**
-GOOGLE_API_KEY = "AIzaSyBBpTCIYUKGxs8oWwe5YtFpeU9RJ8jkK7s"
+# **GOOGLE PLACES API KEY** - Load from environment variable
+GOOGLE_API_KEY = os.environ.get('GOOGLE_PLACES_API_KEY', '')
+
+if not GOOGLE_API_KEY:
+    print("\n❌ ERROR: GOOGLE_PLACES_API_KEY environment variable not set!")
+    print("\nSet it with one of these methods:")
+    print("  1. Export in terminal: export GOOGLE_PLACES_API_KEY='your-key-here'")
+    print("  2. Add to ~/.bashrc or ~/.zshrc: export GOOGLE_PLACES_API_KEY='your-key-here'")
+    print("  3. Run script with: GOOGLE_PLACES_API_KEY='your-key-here' python3 scraper/dirona_api_scraper.py\n")
+    exit(1)
 
 # Search settings
 SEARCH_QUERY = "fine dining restaurant"
@@ -413,10 +423,6 @@ def run_api_scraper(state="ALL"):
     """
     Run the API scraper with Place Details calls.
     """
-    if GOOGLE_API_KEY == "YOUR_API_KEY_HERE":
-        print("\n❌ ERROR: Please add your Google Places API key!")
-        return
-    
     # Determine states
     if state == "ALL":
         states_to_run = STATES_ALPHABETICAL
@@ -434,7 +440,7 @@ def run_api_scraper(state="ALL"):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     print(f"\n{'='*70}")
-    print(f"  DiRoNA Lead Scraper v4.0 - WITH PLACE DETAILS")
+    print(f"  DiRoNA Lead Scraper v4.1 - WITH PLACE DETAILS")
     print(f"{'='*70}")
     print(f"  Target States : {len(states_to_run)}")
     print(f"  Search Query  : {SEARCH_QUERY}")
