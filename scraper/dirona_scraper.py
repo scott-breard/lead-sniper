@@ -2,6 +2,7 @@
 """
 DiRoNA Lead Scraper
 Searches Google Maps ZIP code by ZIP code across 5 categories.
+Processes states in strict alphabetical order (Alabama → Wyoming).
 Outputs results to CSV files in the output/ folder.
 """
 
@@ -54,8 +55,21 @@ CSV_COLUMNS = [
 ]
 
 # ============================================================
-# ALL U.S. ZIP CODES BY STATE
+# ALL 50 U.S. STATES IN STRICT ALPHABETICAL ORDER
 # ============================================================
+
+STATES_ALPHABETICAL = [
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California",
+    "Colorado", "Connecticut", "Delaware", "Florida", "Georgia",
+    "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa",
+    "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland",
+    "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri",
+    "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey",
+    "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio",
+    "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina",
+    "South Dakota", "Tennessee", "Texas", "Utah", "Vermont",
+    "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming",
+]
 
 STATE_ZIPS = {
     "Alabama":        list(range(35004, 36926)),
@@ -118,12 +132,12 @@ def load_progress():
     if os.path.exists(PROGRESS_FILE):
         with open(PROGRESS_FILE, "r") as f:
             return json.load(f)
-    return {"completed_zips": []}
+    return {"completed_zips": [], "completed_states": []}
 
 def save_progress(progress):
     os.makedirs(os.path.dirname(PROGRESS_FILE), exist_ok=True)
     with open(PROGRESS_FILE, "w") as f:
-        json.dump(progress, f)
+        json.dump(progress, f, indent=2)
 
 def is_excluded(name, cuisine):
     text = (name + " " + cuisine).lower()
@@ -138,20 +152,24 @@ def random_delay():
     time.sleep(delay)
 
 def get_output_filename(state):
-    """Returns path to the CSV file for this state."""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     date_str   = datetime.now().strftime("%Y%m%d")
     safe_state = state.replace(" ", "_")
     return os.path.join(OUTPUT_DIR, f"dirona_leads_{safe_state}_{date_str}.csv")
 
 def write_csv(filepath, rows):
-    """Write results to CSV. Appends if file already exists (resume support)."""
+    """Append rows to CSV. Writes header if file is new."""
     file_exists = os.path.exists(filepath)
     with open(filepath, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
         if not file_exists:
             writer.writeheader()
         writer.writerows(rows)
+
+def print_state_header(state, state_num, total_states):
+    print(f"\n{'='*60}")
+    print(f"  STATE {state_num}/{total_states}: {state.upper()}")
+    print(f"{'='*60}")
 
 # ============================================================
 # GOOGLE MAPS SCRAPER
@@ -305,24 +323,40 @@ def scrape_zip_category(page, category, zip_code):
 # MAIN RUNNER
 # ============================================================
 
-def run_scraper(state="Illinois"):
+def run_scraper(state="Alabama"):
     """
-    Run ZIP-by-ZIP scraper for one state or all 50 states.
-    Results are written to CSV immediately after each ZIP
-    so nothing is lost if the run is interrupted.
+    Run ZIP-by-ZIP scraper.
+    - Single state: python dirona_scraper.py "California"
+    - All 50 states in alphabetical order: python dirona_scraper.py ALL
+    Results written to CSV after every ZIP. Auto-resumes if interrupted.
     """
-    states_to_run  = list(STATE_ZIPS.keys()) if state == "ALL" else [state]
-    progress       = load_progress()
-    completed_zips = set(progress.get("completed_zips", []))
+    if state == "ALL":
+        states_to_run = STATES_ALPHABETICAL   # strict A-Z order
+    else:
+        if state not in STATE_ZIPS:
+            print(f"ERROR: '{state}' not found. Check spelling.")
+            return
+        states_to_run = [state]
 
-    for current_state in states_to_run:
-        print(f"\n{'='*55}")
-        print(f"  STATE: {current_state}")
-        print(f"{'='*55}")
+    progress           = load_progress()
+    completed_zips     = set(progress.get("completed_zips", []))
+    completed_states   = set(progress.get("completed_states", []))
+    total_states       = len(states_to_run)
 
-        zips        = STATE_ZIPS.get(current_state, [])
+    print(f"\nDiRoNA Lead Scraper — National Run")
+    print(f"States to process ({total_states}): {', '.join(states_to_run)}")
+
+    for state_num, current_state in enumerate(states_to_run, 1):
+
+        if current_state in completed_states:
+            print(f"\n  Skipping {current_state} (already complete)")
+            continue
+
+        print_state_header(current_state, state_num, total_states)
+
+        zips        = STATE_ZIPS[current_state]
         output_file = get_output_filename(current_state)
-        seen_keys   = set()   # dedup by (name_lower, zip)
+        seen_keys   = set()
         state_total = 0
 
         with sync_playwright() as p:
@@ -348,7 +382,7 @@ def run_scraper(state="Illinois"):
 
                 for category in SEARCH_CATEGORIES:
                     print(f"    Searching: {category}...")
-                    random_delay()   # pause between every single request
+                    random_delay()
 
                     found = scrape_zip_category(page, category, zip_str)
 
@@ -360,24 +394,30 @@ def run_scraper(state="Illinois"):
                             print(f"      FOUND: {r['Restaurant Name']} "
                                   f"| {r['Rating']}⭐ | {r['Price Level']}")
 
-                # Write this ZIP's results to CSV immediately
                 if zip_results:
                     write_csv(output_file, zip_results)
                     state_total += len(zip_results)
-                    print(f"    ✅ {len(zip_results)} added to CSV  "
+                    print(f"    ✅ {len(zip_results)} written to CSV  "
                           f"(state total: {state_total})")
 
-                # Save progress
                 completed_zips.add(zip_str)
-                progress["completed_zips"] = list(completed_zips)
+                progress["completed_zips"]   = list(completed_zips)
                 save_progress(progress)
 
             browser.close()
 
-        print(f"\n  COMPLETE: {current_state}")
-        print(f"  Total qualifying restaurants: {state_total}")
-        print(f"  CSV saved to: {output_file}")
-        print(f"  Open the CSV, review it, and import to Pipedrive.")
+        # Mark state complete
+        completed_states.add(current_state)
+        progress["completed_states"] = list(completed_states)
+        save_progress(progress)
+
+        print(f"\n  ✅ COMPLETE: {current_state}")
+        print(f"     Restaurants found : {state_total}")
+        print(f"     CSV               : {output_file}")
+        print(f"     States done       : {state_num}/{total_states}")
+        remaining = states_to_run[state_num:]
+        if remaining:
+            print(f"     Up next           : {remaining[0]}")
 
 
 # ============================================================
@@ -386,12 +426,19 @@ def run_scraper(state="Illinois"):
 
 if __name__ == "__main__":
     import sys
-    state = sys.argv[1] if len(sys.argv) > 1 else "Illinois"
-    print("DiRoNA Lead Scraper")
-    print(f"Target     : {state}")
-    print(f"Categories : {', '.join(SEARCH_CATEGORIES)}")
-    print(f"Min Rating : {MIN_RATING}+  |  Min Price: {'$'*MIN_PRICE_LEVEL}+  |  Min Reviews: {MIN_REVIEWS}+")
-    print(f"Delay      : {DELAY_MIN}–{DELAY_MAX}s random pause between every request")
-    print(f"Output     : {OUTPUT_DIR}/ folder (CSV per state)")
+    state = sys.argv[1] if len(sys.argv) > 1 else "ALL"
+
+    print("=" * 60)
+    print("  DiRoNA Lead Scraper")
+    print("=" * 60)
+    print(f"  Target     : {state}")
+    print(f"  Order      : Alphabetical (Alabama → Wyoming)")
+    print(f"  Categories : {', '.join(SEARCH_CATEGORIES)}")
+    print(f"  Min Rating : {MIN_RATING}+")
+    print(f"  Min Price  : {'$' * MIN_PRICE_LEVEL}+")
+    print(f"  Min Reviews: {MIN_REVIEWS}+")
+    print(f"  Delay      : {DELAY_MIN}–{DELAY_MAX}s between every request")
+    print(f"  Output     : {OUTPUT_DIR}/ (one CSV per state)")
+    print("=" * 60)
     print()
     run_scraper(state)
