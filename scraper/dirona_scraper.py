@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-DiRoNA Lead Scraper
-Searches Google Maps ZIP code by ZIP code across 5 categories.
+DiRoNA Lead Scraper v2 - Enhanced Bot Evasion
+Searches Google Maps ZIP code by ZIP code with advanced anti-detection.
 Processes states in strict alphabetical order (Alabama → Wyoming).
-Outputs results to CSV files in the output/ folder.
 """
 
 import csv
@@ -16,11 +15,11 @@ from datetime import datetime
 from playwright.sync_api import sync_playwright
 
 # ============================================================
-# CONFIGURATION
+# CONFIGURATION - Enhanced for Bot Evasion
 # ============================================================
 
 SEARCH_CATEGORIES = [
-    "fine dining",
+    "fine dining restaurant",
     "steakhouse",
     "french restaurant",
     "italian restaurant",
@@ -34,17 +33,30 @@ EXCLUDE_KEYWORDS = [
 ]
 
 MIN_RATING      = 4.0
-MIN_PRICE_LEVEL = 3      # $$$ = 3, $$$$ = 4
+MIN_PRICE_LEVEL = 3
 MIN_REVIEWS     = 50
-DELAY_MIN       = 2.5   # seconds between every request
-DELAY_MAX       = 5.0
+DELAY_MIN       = 6.0    # Increased from 2.5
+DELAY_MAX       = 12.0   # Increased from 5.0
+RETRY_ATTEMPTS  = 2      # Retry failed searches
 
 OUTPUT_DIR    = "output"
 PROGRESS_FILE = "scraper/progress.json"
 
-# ============================================================
-# CSV COLUMNS  (matches LeadsScrapper format)
-# ============================================================
+# Rotating user agents
+USER_AGENTS = [
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+]
+
+# Random viewport sizes (desktop)
+VIEWPORTS = [
+    {"width": 1920, "height": 1080},
+    {"width": 1440, "height": 900},
+    {"width": 1536, "height": 864},
+    {"width": 1680, "height": 1050},
+]
 
 CSV_COLUMNS = [
     "Restaurant Name", "Contact Name", "Street Address", "City", "ZIP",
@@ -53,10 +65,6 @@ CSV_COLUMNS = [
     "Facebook", "Twitter", "Instagram", "Google Maps URL",
     "Search Category", "ZIP Searched", "Date Scraped",
 ]
-
-# ============================================================
-# ALL 50 U.S. STATES IN STRICT ALPHABETICAL ORDER
-# ============================================================
 
 STATES_ALPHABETICAL = [
     "Alabama", "Alaska", "Arizona", "Arkansas", "California",
@@ -146,8 +154,9 @@ def is_excluded(name, cuisine):
 def parse_price_level(price_str):
     return price_str.count("$") if price_str else 0
 
-def random_delay():
-    delay = random.uniform(DELAY_MIN, DELAY_MAX)
+def random_delay(min_delay=None, max_delay=None):
+    """Human-like random delay."""
+    delay = random.uniform(min_delay or DELAY_MIN, max_delay or DELAY_MAX)
     print(f"    Pausing {delay:.1f}s...")
     time.sleep(delay)
 
@@ -158,7 +167,6 @@ def get_output_filename(state):
     return os.path.join(OUTPUT_DIR, f"dirona_leads_{safe_state}_{date_str}.csv")
 
 def write_csv(filepath, rows):
-    """Append rows to CSV. Writes header if file is new."""
     file_exists = os.path.exists(filepath)
     with open(filepath, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
@@ -171,77 +179,96 @@ def print_state_header(state, state_num, total_states):
     print(f"  STATE {state_num}/{total_states}: {state.upper()}")
     print(f"{'='*60}")
 
+def human_like_scroll(page):
+    """Simulate human scrolling behavior."""
+    for _ in range(random.randint(2, 4)):
+        page.keyboard.press("End")
+        time.sleep(random.uniform(0.8, 1.8))
+
 # ============================================================
-# GOOGLE MAPS SCRAPER
+# ENHANCED SCRAPER WITH RETRY LOGIC
 # ============================================================
 
-def scrape_zip_category(page, category, zip_code):
+def scrape_zip_category(page, category, zip_code, attempt=1):
     """
-    Search Google Maps for one category + ZIP code.
+    Search Google Maps for one category + ZIP with retry logic.
     Returns list of qualifying restaurant dicts.
     """
     results = []
     url     = f"https://www.google.com/maps/search/{category.replace(' ', '+')}+{zip_code}"
 
     try:
-        page.goto(url, timeout=30000)
-        page.wait_for_timeout(3000)
+        # Navigate with longer timeout
+        page.goto(url, timeout=45000, wait_until="domcontentloaded")
+        time.sleep(random.uniform(3, 5))  # Let page settle
 
-        for _ in range(4):
-            page.keyboard.press("End")
-            page.wait_for_timeout(1200)
+        # Human-like scrolling
+        human_like_scroll(page)
 
+        # Collect listings
         listings   = page.query_selector_all('a[href*="/maps/place/"]')
         seen_hrefs = set()
 
-        for listing in listings[:20]:
+        if not listings:
+            print(f"      No listings found")
+            return []
+
+        for listing in listings[:15]:  # Reduced from 20 to be safer
             href = listing.get_attribute("href")
             if not href or href in seen_hrefs:
                 continue
             seen_hrefs.add(href)
 
             try:
-                listing.click()
-                page.wait_for_timeout(2500)
+                # Wait before clicking
+                time.sleep(random.uniform(0.5, 1.2))
+                listing.scroll_into_view_if_needed()
+                time.sleep(random.uniform(0.3, 0.7))
+                listing.click(timeout=5000)
+                time.sleep(random.uniform(2.5, 4.0))  # Longer wait after click
 
-                # Name
-                name    = ""
+                # Extract data
+                name = ""
                 name_el = page.query_selector("h1.DUwDvf")
                 if name_el:
                     name = name_el.inner_text().strip()
                 if not name:
-                    page.go_back(); page.wait_for_timeout(1200)
+                    page.go_back(timeout=10000)
+                    time.sleep(random.uniform(1, 2))
                     continue
 
                 # Rating
-                rating    = 0.0
+                rating = 0.0
                 rating_el = page.query_selector("span.ceNzKf")
                 if rating_el:
                     m = re.search(r"([\d\.]+)", rating_el.get_attribute("aria-label") or "")
                     if m:
                         rating = float(m.group(1))
                 if rating < MIN_RATING:
-                    page.go_back(); page.wait_for_timeout(1200)
+                    page.go_back(timeout=10000)
+                    time.sleep(random.uniform(1, 2))
                     continue
 
                 # Reviews
-                reviews   = 0
+                reviews = 0
                 review_el = page.query_selector('span[aria-label*="reviews"]')
                 if review_el:
                     m = re.search(r"([\d,]+)", review_el.get_attribute("aria-label") or "")
                     if m:
                         reviews = int(m.group(1).replace(",", ""))
                 if reviews < MIN_REVIEWS:
-                    page.go_back(); page.wait_for_timeout(1200)
+                    page.go_back(timeout=10000)
+                    time.sleep(random.uniform(1, 2))
                     continue
 
-                # Price level
+                # Price
                 price_str = ""
                 price_el  = page.query_selector('span[aria-label*="Price"]')
                 if price_el:
                     price_str = re.sub(r"[^$]", "", price_el.get_attribute("aria-label") or "")
                 if parse_price_level(price_str) < MIN_PRICE_LEVEL:
-                    page.go_back(); page.wait_for_timeout(1200)
+                    page.go_back(timeout=10000)
+                    time.sleep(random.uniform(1, 2))
                     continue
 
                 # Cuisine
@@ -250,30 +277,28 @@ def scrape_zip_category(page, category, zip_code):
                 if cat_el:
                     cuisine = cat_el.inner_text().strip()
                 if is_excluded(name, cuisine):
-                    page.go_back(); page.wait_for_timeout(1200)
+                    page.go_back(timeout=10000)
+                    time.sleep(random.uniform(1, 2))
                     continue
 
-                # Address
+                # Address, phone, website, description
                 address = ""
                 addr_el = page.query_selector('button[data-item-id="address"]')
                 if addr_el:
                     address = addr_el.inner_text().strip()
 
-                # Phone
-                phone    = ""
+                phone = ""
                 phone_el = page.query_selector('button[data-item-id^="phone"]')
                 if phone_el:
                     phone = phone_el.inner_text().strip()
 
-                # Website
                 website = ""
-                web_el  = page.query_selector('a[data-item-id="authority"]')
+                web_el = page.query_selector('a[data-item-id="authority"]')
                 if web_el:
                     website = web_el.get_attribute("href") or ""
 
-                # Description
                 description = ""
-                desc_el     = page.query_selector("div.PYvSYb")
+                desc_el = page.query_selector("div.PYvSYb")
                 if desc_el:
                     description = desc_el.inner_text().strip()
 
@@ -303,18 +328,26 @@ def scrape_zip_category(page, category, zip_code):
                     "Date Scraped":    datetime.now().strftime("%Y-%m-%d"),
                 })
 
-                page.go_back()
-                page.wait_for_timeout(1200)
+                page.go_back(timeout=10000)
+                time.sleep(random.uniform(1.5, 2.5))
 
             except Exception as e:
                 print(f"      Listing error: {e}")
                 try:
-                    page.go_back(); page.wait_for_timeout(1000)
+                    page.go_back(timeout=5000)
+                    time.sleep(random.uniform(1, 2))
                 except:
                     pass
 
     except Exception as e:
-        print(f"    Search error [{category} / {zip_code}]: {e}")
+        error_msg = str(e)
+        print(f"    Search error [{category} / {zip_code}]: {error_msg[:100]}")
+        
+        # Retry logic for context destroyed errors
+        if "context" in error_msg.lower() and attempt < RETRY_ATTEMPTS:
+            print(f"    Retrying (attempt {attempt + 1}/{RETRY_ATTEMPTS})...")
+            time.sleep(random.uniform(8, 15))  # Longer wait before retry
+            return scrape_zip_category(page, category, zip_code, attempt + 1)
 
     return results
 
@@ -325,31 +358,28 @@ def scrape_zip_category(page, category, zip_code):
 
 def run_scraper(state="Alabama"):
     """
-    Run ZIP-by-ZIP scraper.
-    - Single state: python dirona_scraper.py "California"
-    - All 50 states in alphabetical order: python dirona_scraper.py ALL
-    Results written to CSV after every ZIP. Auto-resumes if interrupted.
+    Run ZIP-by-ZIP scraper with enhanced bot evasion.
     """
     if state == "ALL":
-        states_to_run = STATES_ALPHABETICAL   # strict A-Z order
+        states_to_run = STATES_ALPHABETICAL
     else:
         if state not in STATE_ZIPS:
-            print(f"ERROR: '{state}' not found. Check spelling.")
+            print(f"ERROR: '{state}' not found.")
             return
         states_to_run = [state]
 
-    progress           = load_progress()
-    completed_zips     = set(progress.get("completed_zips", []))
-    completed_states   = set(progress.get("completed_states", []))
-    total_states       = len(states_to_run)
+    progress         = load_progress()
+    completed_zips   = set(progress.get("completed_zips", []))
+    completed_states = set(progress.get("completed_states", []))
+    total_states     = len(states_to_run)
 
-    print(f"\nDiRoNA Lead Scraper — National Run")
-    print(f"States to process ({total_states}): {', '.join(states_to_run)}")
+    print(f"\nDiRoNA Lead Scraper v2 — National Run")
+    print(f"States: {', '.join(states_to_run[:5])}{'...' if len(states_to_run) > 5 else ''}")
 
     for state_num, current_state in enumerate(states_to_run, 1):
 
         if current_state in completed_states:
-            print(f"\n  Skipping {current_state} (already complete)")
+            print(f"\n  Skipping {current_state} (complete)")
             continue
 
         print_state_header(current_state, state_num, total_states)
@@ -359,14 +389,17 @@ def run_scraper(state="Alabama"):
         seen_keys   = set()
         state_total = 0
 
+        # New browser context per state with random config
         with sync_playwright() as p:
+            viewport = random.choice(VIEWPORTS)
+            user_agent = random.choice(USER_AGENTS)
+            
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/122.0.0.0 Safari/537.36"
-                )
+                user_agent=user_agent,
+                viewport=viewport,
+                locale="en-US",
+                timezone_id="America/New_York",
             )
             page = context.new_page()
 
@@ -391,33 +424,27 @@ def run_scraper(state="Alabama"):
                         if key not in seen_keys:
                             seen_keys.add(key)
                             zip_results.append(r)
-                            print(f"      FOUND: {r['Restaurant Name']} "
+                            print(f"      ✅ FOUND: {r['Restaurant Name']} "
                                   f"| {r['Rating']}⭐ | {r['Price Level']}")
 
                 if zip_results:
                     write_csv(output_file, zip_results)
                     state_total += len(zip_results)
-                    print(f"    ✅ {len(zip_results)} written to CSV  "
-                          f"(state total: {state_total})")
+                    print(f"    💾 {len(zip_results)} written (state: {state_total})")
 
                 completed_zips.add(zip_str)
-                progress["completed_zips"]   = list(completed_zips)
+                progress["completed_zips"] = list(completed_zips)
                 save_progress(progress)
 
             browser.close()
 
-        # Mark state complete
         completed_states.add(current_state)
         progress["completed_states"] = list(completed_states)
         save_progress(progress)
 
-        print(f"\n  ✅ COMPLETE: {current_state}")
-        print(f"     Restaurants found : {state_total}")
-        print(f"     CSV               : {output_file}")
-        print(f"     States done       : {state_num}/{total_states}")
-        remaining = states_to_run[state_num:]
-        if remaining:
-            print(f"     Up next           : {remaining[0]}")
+        print(f"\n  ✅ {current_state} COMPLETE: {state_total} restaurants")
+        print(f"     CSV: {output_file}")
+        print(f"     Progress: {state_num}/{total_states} states")
 
 
 # ============================================================
@@ -429,16 +456,14 @@ if __name__ == "__main__":
     state = sys.argv[1] if len(sys.argv) > 1 else "ALL"
 
     print("=" * 60)
-    print("  DiRoNA Lead Scraper")
+    print("  DiRoNA Lead Scraper v2 - Enhanced Bot Evasion")
     print("=" * 60)
-    print(f"  Target     : {state}")
-    print(f"  Order      : Alphabetical (Alabama → Wyoming)")
-    print(f"  Categories : {', '.join(SEARCH_CATEGORIES)}")
-    print(f"  Min Rating : {MIN_RATING}+")
-    print(f"  Min Price  : {'$' * MIN_PRICE_LEVEL}+")
-    print(f"  Min Reviews: {MIN_REVIEWS}+")
-    print(f"  Delay      : {DELAY_MIN}–{DELAY_MAX}s between every request")
-    print(f"  Output     : {OUTPUT_DIR}/ (one CSV per state)")
+    print(f"  Target       : {state}")
+    print(f"  Delay        : {DELAY_MIN}–{DELAY_MAX}s (random)")
+    print(f"  User Agents  : {len(USER_AGENTS)} rotating")
+    print(f"  Viewports    : {len(VIEWPORTS)} random sizes")
+    print(f"  Retry Logic  : {RETRY_ATTEMPTS} attempts per search")
+    print(f"  Min Rating   : {MIN_RATING}+ | Price: {'$'*MIN_PRICE_LEVEL}+ | Reviews: {MIN_REVIEWS}+")
     print("=" * 60)
     print()
     run_scraper(state)
