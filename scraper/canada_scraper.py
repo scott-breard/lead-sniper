@@ -38,6 +38,14 @@ EXCLUDE_KEYWORDS = [
     "tim hortons", "tims"
 ]
 
+# Geographic bounds for Nova Scotia (to filter out wrong locations)
+# Nova Scotia latitude: ~43.4°N to 47.0°N
+# Nova Scotia longitude: ~-66.4°W to -59.7°W
+NS_LAT_MIN = 43.4
+NS_LAT_MAX = 47.0
+NS_LNG_MIN = -66.4
+NS_LNG_MAX = -59.7
+
 # API settings
 API_DELAY = 0.1
 MAX_RESULTS_PER_SEARCH = 20
@@ -60,21 +68,41 @@ CSV_COLUMNS = [
     "Search Location", "Date Scraped"
 ]
 
-# Nova Scotia cities and towns to search
+# Nova Scotia cities and towns to search (using full "Nova Scotia, Canada" format)
 NOVA_SCOTIA_LOCATIONS = [
     # Major cities
-    "Halifax, NS", "Dartmouth, NS", "Sydney, NS", "Truro, NS",
-    "New Glasgow, NS", "Glace Bay, NS", "Kentville, NS",
+    "Halifax, Nova Scotia, Canada",
+    "Dartmouth, Nova Scotia, Canada",
+    "Sydney, Nova Scotia, Canada",
+    "Truro, Nova Scotia, Canada",
+    "New Glasgow, Nova Scotia, Canada",
+    "Glace Bay, Nova Scotia, Canada",
+    "Kentville, Nova Scotia, Canada",
     
     # Mid-size towns
-    "Amherst, NS", "Bridgewater, NS", "Yarmouth, NS", "Antigonish, NS",
-    "Port Hawkesbury, NS", "Stellarton, NS", "Westville, NS",
-    "Pictou, NS", "Windsor, NS", "Wolfville, NS", "Chester, NS",
+    "Amherst, Nova Scotia, Canada",
+    "Bridgewater, Nova Scotia, Canada",
+    "Yarmouth, Nova Scotia, Canada",
+    "Antigonish, Nova Scotia, Canada",
+    "Port Hawkesbury, Nova Scotia, Canada",
+    "Stellarton, Nova Scotia, Canada",
+    "Westville, Nova Scotia, Canada",
+    "Pictou, Nova Scotia, Canada",
+    "Windsor, Nova Scotia, Canada",
+    "Wolfville, Nova Scotia, Canada",
+    "Chester, Nova Scotia, Canada",
     
     # Coastal/tourist areas
-    "Lunenburg, NS", "Mahone Bay, NS", "Baddeck, NS", "Ingonish, NS",
-    "Digby, NS", "Annapolis Royal, NS", "Liverpool, NS", "Shelburne, NS",
-    "Pugwash, NS", "Parrsboro, NS"
+    "Lunenburg, Nova Scotia, Canada",
+    "Mahone Bay, Nova Scotia, Canada",
+    "Baddeck, Nova Scotia, Canada",
+    "Ingonish, Nova Scotia, Canada",
+    "Digby, Nova Scotia, Canada",
+    "Annapolis Royal, Nova Scotia, Canada",
+    "Liverpool, Nova Scotia, Canada",
+    "Shelburne, Nova Scotia, Canada",
+    "Pugwash, Nova Scotia, Canada",
+    "Parrsboro, Nova Scotia, Canada"
 ]
 
 PROVINCE_ABBREV = {"Nova Scotia": "NS"}
@@ -99,7 +127,8 @@ def load_progress():
         "total_found": 0,
         "total_qualified": 0,
         "search_api_calls": 0,
-        "details_api_calls": 0
+        "details_api_calls": 0,
+        "filtered_out_of_bounds": 0
     }
 
 def save_progress(progress):
@@ -112,6 +141,21 @@ def is_excluded(name, cuisine_type):
     """Check if restaurant should be excluded."""
     text = (name + " " + (cuisine_type or "")).lower()
     return any(kw in text for kw in EXCLUDE_KEYWORDS)
+
+def is_in_nova_scotia(lat, lng):
+    """Validate that coordinates are within Nova Scotia bounds."""
+    if not lat or not lng:
+        return False
+    
+    try:
+        lat_float = float(lat)
+        lng_float = float(lng)
+        
+        # Check if within Nova Scotia bounding box
+        return (NS_LAT_MIN <= lat_float <= NS_LAT_MAX and 
+                NS_LNG_MIN <= lng_float <= NS_LNG_MAX)
+    except (ValueError, TypeError):
+        return False
 
 def write_csv(filepath, rows):
     """Append rows to CSV."""
@@ -223,6 +267,15 @@ def parse_place_with_details(place, details, search_location):
     if not name:
         return None
     
+    # Get coordinates FIRST for validation
+    location = data.get("location", {})
+    lat = location.get("latitude", "")
+    lng = location.get("longitude", "")
+    
+    # **CRITICAL: Filter out results not in Nova Scotia**
+    if not is_in_nova_scotia(lat, lng):
+        return None
+    
     # Parse address
     address = data.get("formattedAddress", "")
     address_parts = address.split(", ") if address else []
@@ -278,11 +331,6 @@ def parse_place_with_details(place, details, search_location):
     # Exclusion check
     if is_excluded(name, cuisine_type):
         return None
-    
-    # Coordinates
-    location = data.get("location", {})
-    lat = location.get("latitude", "")
-    lng = location.get("longitude", "")
     
     # Parse hours
     hours = parse_hours(data.get("regularOpeningHours")) if details else {
@@ -347,6 +395,7 @@ def run_scraper():
     print(f"  Locations     : {len(NOVA_SCOTIA_LOCATIONS)} cities/towns")
     print(f"  Search Query  : {SEARCH_QUERY}")
     print(f"  Filters       : Rating ≥{MIN_RATING} | Price ≥{'$'*MIN_PRICE_LEVEL} | Reviews ≥{MIN_REVIEWS}")
+    print(f"  Geo Bounds    : Lat {NS_LAT_MIN}-{NS_LAT_MAX}°N | Lng {NS_LNG_MIN}-{NS_LNG_MAX}°W")
     print(f"  Output File   : {output_file}")
     print(f"  Progress      : {len(completed_locations)}/{len(NOVA_SCOTIA_LOCATIONS)} locations | {progress.get('total_qualified', 0)} qualified")
     print(f"{'='*70}\n")
@@ -371,11 +420,33 @@ def run_scraper():
             time.sleep(API_DELAY)
             continue
         
-        print(f"    Found {len(places)} results, fetching details...")
+        print(f"    Found {len(places)} results, validating coordinates...")
         
-        # Process each place
-        qualified = []
+        # Filter by coordinates first (before getting details)
+        valid_places = []
         for place in places:
+            location_data = place.get("location", {})
+            lat = location_data.get("latitude", "")
+            lng = location_data.get("longitude", "")
+            
+            if is_in_nova_scotia(lat, lng):
+                valid_places.append(place)
+            else:
+                progress["filtered_out_of_bounds"] = progress.get("filtered_out_of_bounds", 0) + 1
+        
+        if not valid_places:
+            print(f"    ⚠️  All results filtered (out of Nova Scotia bounds)")
+            completed_locations.add(location)
+            progress["completed_locations"] = list(completed_locations)
+            save_progress(progress)
+            time.sleep(API_DELAY)
+            continue
+        
+        print(f"    ✓ {len(valid_places)} within Nova Scotia, fetching details...")
+        
+        # Process each valid place
+        qualified = []
+        for place in valid_places:
             place_id = place.get("id", "")
             if place_id in seen_place_ids:
                 continue
@@ -419,12 +490,13 @@ def run_scraper():
     print(f"\n\n{'='*70}")
     print(f"  🎉 NOVA SCOTIA COMPLETE!")
     print(f"{'='*70}")
-    print(f"  Locations Searched    : {len(completed_locations)}")
-    print(f"  Search API Calls      : {progress['search_api_calls']} (${search_cost:.2f})")
-    print(f"  Details API Calls     : {progress['details_api_calls']} (${details_cost:.2f})")
-    print(f"  Qualified Restaurants : {progress['total_qualified']}")
-    print(f"  Total Cost            : ${total_cost:.2f}")
-    print(f"  Output File           : {output_file}")
+    print(f"  Locations Searched       : {len(completed_locations)}")
+    print(f"  Search API Calls         : {progress['search_api_calls']} (${search_cost:.2f})")
+    print(f"  Details API Calls        : {progress['details_api_calls']} (${details_cost:.2f})")
+    print(f"  Filtered (Out of Bounds) : {progress.get('filtered_out_of_bounds', 0)}")
+    print(f"  Qualified Restaurants    : {progress['total_qualified']}")
+    print(f"  Total Cost               : ${total_cost:.2f}")
+    print(f"  Output File              : {output_file}")
     print(f"{'='*70}\n")
 
 if __name__ == "__main__":
