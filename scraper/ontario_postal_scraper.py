@@ -4,6 +4,7 @@ Canadian Restaurant Scraper - Ontario Edition (By Postal Code)
 Searches ALL Ontario postal codes (FSAs) for fine dining restaurants.
 Uses Google Places API with Place Details for complete data.
 STRICT GEOGRAPHIC VALIDATION - Only returns restaurants within Ontario bounds.
+MULTI-QUERY SEARCH - 4 search queries per FSA for comprehensive coverage.
 """
 
 import csv
@@ -25,8 +26,14 @@ if not GOOGLE_API_KEY:
     print("\nRun: export GOOGLE_PLACES_API_KEY='your-key-here'\n")
     exit(1)
 
-# Search settings
-SEARCH_QUERY = "fine dining restaurant"
+# Search settings - MULTIPLE QUERIES per location
+SEARCH_QUERIES = [
+    "fine dining restaurant",
+    "steakhouse",
+    "French restaurant",
+    "Italian restaurant"
+]
+
 MIN_RATING = 4.0
 MIN_PRICE_LEVEL = 3  # 3 = $$$, 4 = $$$$
 MIN_REVIEWS = 25
@@ -68,7 +75,6 @@ CSV_COLUMNS = [
 ]
 
 # ALL Ontario Forward Sortation Areas (FSAs) - postal code prefixes
-# Ontario uses: K*, L*, M*, N*, P* series
 ONTARIO_FSAs = [
     # K series - Eastern Ontario (Ottawa region)
     "K0A", "K0B", "K0C", "K0E", "K0G", "K0H", "K0J", "K0K", "K0L", "K0M",
@@ -196,11 +202,11 @@ def write_csv(filepath, rows):
 # GOOGLE PLACES API
 # ============================================================
 
-def search_places_api(fsa_code):
+def search_places_api(query, fsa_code):
     """Search Google Places API for restaurants in a postal code area."""
     url = "https://places.googleapis.com/v1/places:searchText"
     
-    query = f"{SEARCH_QUERY} {fsa_code} Ontario Canada"
+    full_query = f"{query} {fsa_code} Ontario Canada"
     
     headers = {
         "Content-Type": "application/json",
@@ -213,7 +219,7 @@ def search_places_api(fsa_code):
     }
     
     payload = {
-        "textQuery": query,
+        "textQuery": full_query,
         "maxResultCount": MAX_RESULTS_PER_SEARCH
     }
     
@@ -410,7 +416,7 @@ def parse_place_with_details(place, details, search_fsa):
 # ============================================================
 
 def run_scraper():
-    """Run the Ontario postal code scraper with STRICT geographic validation."""
+    """Run the Ontario postal code scraper with MULTI-QUERY search."""
     progress = load_progress()
     completed_fsas = set(progress.get("completed_fsas", []))
     seen_place_ids = set()
@@ -418,11 +424,14 @@ def run_scraper():
     output_file = get_output_filename()
     
     print(f"\n{'='*70}")
-    print(f"  Ontario Fine Dining Scraper (By Postal Code)")
+    print(f"  Ontario Fine Dining Scraper (Multi-Query)")
     print(f"  STRICT MODE: Only restaurants within ON bounds")
     print(f"{'='*70}")
     print(f"  FSAs (Postal Codes) : {len(ONTARIO_FSAs)} areas")
-    print(f"  Search Query        : {SEARCH_QUERY}")
+    print(f"  Search Queries      : {len(SEARCH_QUERIES)} per FSA")
+    for q in SEARCH_QUERIES:
+        print(f"    • {q}")
+    print(f"  Total Searches      : {len(ONTARIO_FSAs) * len(SEARCH_QUERIES)} = {len(ONTARIO_FSAs)} × {len(SEARCH_QUERIES)}")
     print(f"  Filters             : Rating ≥{MIN_RATING} | Price ≥{'$'*MIN_PRICE_LEVEL} | Reviews ≥{MIN_REVIEWS}")
     print(f"  Geo Bounds          : Lat {ON_LAT_MIN}-{ON_LAT_MAX}°N | Lng {ON_LNG_MIN}-{ON_LNG_MAX}°W")
     print(f"  Output File         : {output_file}")
@@ -437,41 +446,44 @@ def run_scraper():
         
         print(f"\n[{idx}/{len(ONTARIO_FSAs)}] FSA: {fsa}")
         
-        # Search
-        places = search_places_api(fsa)
-        progress["search_api_calls"] = progress.get("search_api_calls", 0) + 1
+        all_valid_places = []
         
-        if not places:
-            completed_fsas.add(fsa)
-            progress["completed_fsas"] = list(completed_fsas)
-            save_progress(progress)
-            time.sleep(API_DELAY)
-            continue
-        
-        # STRICT filter by coordinates BEFORE getting details
-        valid_places = []
-        for place in places:
-            location_data = place.get("location", {})
-            lat = location_data.get("latitude", "")
-            lng = location_data.get("longitude", "")
+        # Search with multiple queries
+        for query_idx, query in enumerate(SEARCH_QUERIES, 1):
+            print(f"  Query {query_idx}/{len(SEARCH_QUERIES)}: {query}")
             
-            if is_in_ontario(lat, lng):
-                valid_places.append(place)
-            else:
-                progress["filtered_out_of_bounds"] = progress.get("filtered_out_of_bounds", 0) + 1
+            places = search_places_api(query, fsa)
+            progress["search_api_calls"] = progress.get("search_api_calls", 0) + 1
+            
+            if not places:
+                time.sleep(API_DELAY)
+                continue
+            
+            # STRICT filter by coordinates BEFORE getting details
+            for place in places:
+                location_data = place.get("location", {})
+                lat = location_data.get("latitude", "")
+                lng = location_data.get("longitude", "")
+                
+                if is_in_ontario(lat, lng):
+                    all_valid_places.append(place)
+                else:
+                    progress["filtered_out_of_bounds"] = progress.get("filtered_out_of_bounds", 0) + 1
+            
+            time.sleep(API_DELAY)
         
-        if not valid_places:
+        if not all_valid_places:
+            print(f"    ⚠️  No valid results across all queries")
             completed_fsas.add(fsa)
             progress["completed_fsas"] = list(completed_fsas)
             save_progress(progress)
-            time.sleep(API_DELAY)
             continue
         
-        print(f"    ✓ {len(valid_places)} within Ontario bounds")
+        print(f"    ✓ {len(all_valid_places)} total results within Ontario bounds")
         
-        # Process each valid place
+        # Process each valid place (deduplicate by place_id)
         qualified = []
-        for place in valid_places:
+        for place in all_valid_places:
             place_id = place.get("id", "")
             if place_id in seen_place_ids:
                 continue
@@ -503,10 +515,8 @@ def run_scraper():
         # Update progress
         completed_fsas.add(fsa)
         progress["completed_fsas"] = list(completed_fsas)
-        progress["total_found"] = progress.get("total_found", 0) + len(places)
+        progress["total_found"] = progress.get("total_found", 0) + len(all_valid_places)
         save_progress(progress)
-        
-        time.sleep(API_DELAY)
     
     search_cost = progress.get('search_api_calls', 0) * 0.032
     details_cost = progress.get('details_api_calls', 0) * 0.017
