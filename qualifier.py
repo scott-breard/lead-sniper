@@ -145,7 +145,8 @@ class DisqualificationEngine:
                 "patterns": [
                     r'\bpizza\b',
                     r'\bpizzas\b',
-                    r'\bmargherita\b',
+                    r'\bmargherita\s+pizza\b',
+                    r'\bpizza\s+margherita\b',
                     r'\bneapolitan\b(?=.*\bpizza\b)',
                     r'\bcalzone\b',
                 ],
