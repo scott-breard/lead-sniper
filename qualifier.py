@@ -67,6 +67,37 @@ USER_AGENT = (
 
 HEADERS = {"User-Agent": USER_AGENT}
 
+# Non-restaurant business types to auto-disqualify based on name/website text.
+# These get caught by Google Places but are NOT restaurants.
+NON_RESTAURANT_KEYWORDS = [
+    r'\bnutrition\s*(?:center|centre|shop|store|bar|club|hub)\b',
+    r'\bherbalife\b',
+    r'\bjuice\s*(?:bar|shop|store|press)\b',
+    r'\bsmoothie\s*(?:bar|shop|store|king)\b',
+    r'\bcatering\s+(?:company|service|only)\b',
+    r'\bfood\s+truck\b',
+    r'\bghost\s+kitchen\b',
+    r'\bcloud\s+kitchen\b',
+    r'\bvending\b',
+    r'\bmeal\s+prep\b',
+    r'\bmeal\s+delivery\b',
+    r'\bcafeteria\b',
+    r'\bconvenience\s+store\b',
+    r'\bgrocery\b',
+    r'\bgas\s+station\b',
+    r'\bsnack\s*(?:bar|shop|shack)\b',
+    r'\benergy\s+(?:bar|drink|shop)\b',
+    r'\bsupplement\b',
+    r'\bprotein\s+(?:bar|shop|shake)\b',
+    r'\bice\s+cream\s+(?:shop|parlor|parlour|stand|truck)\b',
+    r'\bdonut\s*(?:shop|store)\b',
+    r'\bdoughnut\s*(?:shop|store)\b',
+    r'\bbakery\b',
+    r'\bcoffee\s+shop\b',
+]
+
+NON_RESTAURANT_COMPILED = [re.compile(p, re.IGNORECASE) for p in NON_RESTAURANT_KEYWORDS]
+
 
 # ---------------------------------------------------------------------------
 # Disqualification Rules
@@ -759,6 +790,24 @@ def process_csv(input_path: str, output_path: str, use_playwright: bool = True):
 
         print(f"\n[{idx + 1}/{len(rows)}] {restaurant_name}")
 
+        # --- Pre-filter: not a restaurant ---
+        name_lower = restaurant_name.lower()
+        non_restaurant_match = None
+        for pattern in NON_RESTAURANT_COMPILED:
+            m = pattern.search(name_lower)
+            if m:
+                non_restaurant_match = m.group()
+                break
+        if non_restaurant_match:
+            print(f"  ⛔ Not a restaurant: matched '{non_restaurant_match}'")
+            stats["pre_filtered"] += 1
+            results.append(row + [
+                "not_a_restaurant",
+                f"Business name matched: {non_restaurant_match}",
+                "", "", "", ""
+            ])
+            continue
+
         # --- Pre-filter: rating ---
         if rating_col >= 0 and rating_col < len(row):
             try:
@@ -1191,6 +1240,23 @@ document.getElementById('uploadForm').addEventListener('submit', async (e) => {
                 restaurant = row[n_col] if n_col < len(row) else f"Row {idx + 1}"
                 website = row[w_col] if w_col < len(row) else ""
                 pct = int(((idx + 1) / len(csv_rows)) * 100)
+
+                # Pre-filter: not a restaurant
+                name_lower = restaurant.lower()
+                non_rest_match = None
+                for pattern in NON_RESTAURANT_COMPILED:
+                    m = pattern.search(name_lower)
+                    if m:
+                        non_rest_match = m.group()
+                        break
+                if non_rest_match:
+                    msg = f"[{idx+1}/{len(csv_rows)}] {restaurant} — ⛔ Not a restaurant: '{non_rest_match}'"
+                    yield f"data: {json.dumps({'type': 'progress', 'percent': pct, 'message': msg, 'status': 'warning'})}\n\n"
+                    local_stats["pre_filtered"] += 1
+                    all_results.append(row + [
+                        "not_a_restaurant", f"Business name matched: {non_rest_match}", "", "", "", ""
+                    ])
+                    continue
 
                 # Pre-filter: rating
                 if r_col >= 0 and r_col < len(row):
