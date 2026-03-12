@@ -1152,7 +1152,10 @@ def run_webapp(port=5050):
                     <div class="label">Review / Other</div>
                 </div>
             </div>
-            <button class="btn" id="downloadBtn" style="margin-top: 1rem;">Download Results CSV</button>
+            <div style="display: flex; gap: 1rem; margin-top: 1rem;">
+                <button class="btn" id="downloadBtn">Download Results CSV</button>
+                <button class="btn" id="clearBtn" style="background: #444;">Clear &amp; Start New</button>
+            </div>
         </div>
 
         <div class="card">
@@ -1246,6 +1249,27 @@ document.getElementById('uploadForm').addEventListener('submit', async (e) => {
     } finally {
         submitBtn.disabled = false;
     }
+});
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+    // Hide results
+    document.getElementById('resultsSection').style.display = 'none';
+    // Reset progress
+    document.getElementById('progressContainer').style.display = 'none';
+    document.getElementById('progressFill').style.width = '0%';
+    document.getElementById('progressText').textContent = 'Starting...';
+    // Clear log
+    document.getElementById('logOutput').innerHTML = '';
+    // Reset stats
+    document.getElementById('statEligible').textContent = '0';
+    document.getElementById('statDisqualified').textContent = '0';
+    document.getElementById('statOther').textContent = '0';
+    // Reset file input
+    fileInput.value = '';
+    fileName.textContent = '';
+    submitBtn.disabled = true;
+    // Scroll to top
+    window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 </script>
 </body>
