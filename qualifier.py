@@ -336,12 +336,68 @@ class DisqualificationEngine:
                     + " | ".join(matched_lines[:5])
                 )
 
+        # --- Check menu prices: if we can read prices and they're all under $30, disqualify ---
+        prices = self._extract_prices(menu_text)
+        if prices:
+            # Use the 75th percentile of prices to judge — avoids outliers
+            # like a $5 side or a $200 wine skewing the result
+            sorted_prices = sorted(prices)
+            p75_index = int(len(sorted_prices) * 0.75)
+            top_entree_price = sorted_prices[p75_index]
+            avg_price = sum(prices) / len(prices)
+
+            if top_entree_price < 30:
+                disqualifiers.append("low menu prices")
+                details.append(
+                    f"[LOW PRICES] {len(prices)} prices found — "
+                    f"75th percentile: ${top_entree_price:.0f}, "
+                    f"avg: ${avg_price:.0f}, "
+                    f"max: ${sorted_prices[-1]:.0f}"
+                )
+
         qualified = len(disqualifiers) == 0
         return {
             "qualified": qualified,
             "disqualifiers": disqualifiers,
             "details": details,
         }
+
+    def _extract_prices(self, text: str) -> list:
+        """
+        Extract dollar prices from menu text.
+        Handles: $25, $25.00, US$30, $20-30, $20–30, 25$, etc.
+        Returns list of floats.
+        """
+        prices = []
+
+        # Pattern 1: $XX or US$XX or CA$XX (most common)
+        for m in re.finditer(r'(?:US|CA|C)?\$\s*(\d+(?:\.\d{2})?)', text):
+            try:
+                price = float(m.group(1))
+                if 5 <= price <= 500:  # filter out noise like years ($2026)
+                    prices.append(price)
+            except ValueError:
+                pass
+
+        # Pattern 2: Price ranges like $20-30 or $20–30 (take the higher number)
+        for m in re.finditer(r'(?:US|CA|C)?\$\s*\d+(?:\.\d{2})?\s*[\-–—]\s*(\d+(?:\.\d{2})?)', text):
+            try:
+                price = float(m.group(1))
+                if 5 <= price <= 500:
+                    prices.append(price)
+            except ValueError:
+                pass
+
+        # Pattern 3: XX$ format (less common)
+        for m in re.finditer(r'(\d+(?:\.\d{2})?)\s*\$', text):
+            try:
+                price = float(m.group(1))
+                if 5 <= price <= 500:
+                    prices.append(price)
+            except ValueError:
+                pass
+
+        return prices
 
 
 # ---------------------------------------------------------------------------
