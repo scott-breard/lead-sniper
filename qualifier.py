@@ -94,6 +94,23 @@ NON_RESTAURANT_KEYWORDS = [
     r'\bdoughnut\s*(?:shop|store)\b',
     r'\bbakery\b',
     r'\bcoffee\s+shop\b',
+    r'\bwedding\s+venue\b',
+    r'\bevent\s+(?:center|centre|hall|space|venue)\b',
+    r'\bbanquet\s+hall\b',
+    r'\breception\s+hall\b',
+    r'\bconference\s+center\b',
+    r'\bconvention\s+center\b',
+    r'\bcountry\s+club\b',
+    r'\bgolf\s+club\b',
+    r'\bcabin\s+rental\b',
+    r'\bhotel\b',
+    r'\bmotel\b',
+    r'\bresort\b(?!.*\brestaurant)',
+    r'\bbed\s+(?:&|and)\s+breakfast\b',
+    r'\bcookware\b',
+    r'\bkitchen\s+(?:supply|store|shop)\b',
+    r'\bcooking\s+(?:class|school|academy)\b',
+    r'\bculinary\s+(?:school|academy|institute)\b',
 ]
 
 NON_RESTAURANT_COMPILED = [re.compile(p, re.IGNORECASE) for p in NON_RESTAURANT_KEYWORDS]
