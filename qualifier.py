@@ -184,6 +184,15 @@ class DisqualificationEngine:
                 r'\bteppan\b',
                 r'\bhibachi\s+grill\b',
             ],
+            "lobster roll": [
+                r'\blobster\s+roll\b',
+                r'\blobster\s+rolls\b',
+            ],
+            "fried chicken sandwich": [
+                r'\bfried\s+chicken\s+sandwich\b',
+                r'\bchicken\s+fried\s+sandwich\b',
+                r'\bcrispy\s+chicken\s+sandwich\b',
+            ],
         }
 
         # --- Counted disqualifiers (threshold-based) ---
@@ -1105,6 +1114,8 @@ def run_webapp(port=5050):
             <div class="item">❌ Brazilian Steakhouse</div>
             <div class="item">❌ Hot Pot</div>
             <div class="item">❌ Teppanyaki</div>
+            <div class="item">❌ Lobster Roll</div>
+            <div class="item">❌ Fried Chicken Sandwich</div>
             <div class="item counted">⚠️ More than 1 Pizza</div>
             <div class="item counted">⚠️ More than 1 Burger</div>
         </div>
